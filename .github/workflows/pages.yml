@@ -1,0 +1,54 @@
+name: pages
+
+# Writes this origin's site -- the git frame of the go-slides playground, built
+# -- and publishes it at https://go-slides-usercontent.github.io/. The playground
+# (go-slides/go-slides.github.io) declares this origin in .second-origin.json and
+# its CI runs `secondorigin verify` against what is published here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # The only page the frame talks to and lets embed it.
+  ALLOW: https://go-slides.github.io
+  # The GitLab application's client id (not a secret), empty until one is
+  # registered with the redirect URI https://go-slides-usercontent.github.io/callback.html.
+  GITLAB_CLIENT_ID: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.3' }
+      - name: write the site
+        run: go run ./cmd/site --allow "$ALLOW" --gitlab-client-id "$GITLAB_CLIENT_ID" --out "$RUNNER_TEMP/_site"
+      - name: the files written
+        run: ls -la "$RUNNER_TEMP/_site"
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
+        with: { path: "${{ runner.temp }}/_site" }
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

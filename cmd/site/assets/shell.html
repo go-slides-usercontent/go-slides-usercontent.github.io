@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' https://api.github.com https://gitlab.com; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Git frame</title>
+<style>
+html,body{margin:0;font:14px system-ui,sans-serif}
+body{padding:8px;color:#222;background:#fff}
+@media (prefers-color-scheme:dark){body{color:#eee;background:#1b1b1b}}
+label{display:block;margin:6px 0 2px}
+input[type=password],select{width:100%;box-sizing:border-box;padding:4px;font:inherit}
+button{margin:8px 6px 0 0;padding:4px 10px;font:inherit}
+#status{margin-top:8px;min-height:1.4em}
+</style>
+<script src="wasm_exec.js" defer></script>
+<script src="shell.js" defer></script>
+</head>
+<body>
+<label for="forge" id="l-forge">Forge</label>
+<select id="forge"><option value="github">GitHub</option><option value="gitlab">GitLab</option></select>
+<label for="tok" id="l-tok">Access token</label>
+<input id="tok" type="password" autocomplete="off" spellcheck="false">
+<label><input id="remember" type="checkbox"> <span id="l-remember">Remember on this device</span></label>
+<div>
+<button id="connect" type="button">Connect</button>
+<button id="signin" type="button" hidden>Sign in with GitLab</button>
+<button id="disconnect" type="button" disabled>Disconnect</button>
+</div>
+<div id="status" role="status" aria-live="polite"></div>
+</body>
+</html>
