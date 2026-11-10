@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+  test:
+    name: gofmt, vet, test, fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.3' }
+      - run: go version
+      - name: gofmt
+        run: |
+          drift=$(gofmt -l .)
+          if [ -n "$drift" ]; then echo "::error::not gofmt-clean:"; echo "$drift"; exit 1; fi
+      - run: go vet ./...
+      - run: GOOS=js GOARCH=wasm go vet ./cmd/frame
+      - run: go test -race -count=1 ./...
+      # The frame's checks read what a page sends; any bytes must give an answer,
+      # never a panic.
+      - name: fuzz the command checks
+        run: go test -run '^$' -fuzz FuzzChecks -fuzztime 30s ./frame
+
+  browser:
+    name: the frame in Chrome
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.3' }
+      - uses: actions/setup-node@v7
+        with: { node-version: '24' }
+      - uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
+        id: chrome
+        with:
+          chrome-version: stable
+          install-dependencies: true
+      - run: npm install --no-save --prefix "$RUNNER_TEMP/pptr" puppeteer-core@24.43.1
+      # Two loopback origins and a fake GitHub and GitLab (request interception):
+      # the page cannot read the token, the commands work for both forges, the
+      # sign-in is PKCE. Nothing leaves the runner.
+      - name: drive the frame
+        env:
+          CHROME: ${{ steps.chrome.outputs.chrome-path }}
+          NODE_PATH: ${{ runner.temp }}/pptr/node_modules
+        run: node browsertest/frame.cjs
