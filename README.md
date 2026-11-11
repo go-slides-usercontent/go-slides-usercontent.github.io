@@ -12,8 +12,14 @@ iframe and sends it typed commands over `postMessage`; it never holds the token
 
 ## The protocol
 
-The page sends `{t, id, nonce, ...}` to the frame; the frame answers
-`{t: "result", id, cmd, ok, data | error}` and announces `{t: "ready" | "state"}`.
+The page first says `{t: "hello", nonce}` (when the iframe has loaded). The frame
+believes it by the message's origin (allow-listed), its source (the framing
+window) and the nonce of its URL fragment; until then it says **nothing** to
+anybody, and it never asks the browser who framed it (`location.ancestorOrigins`
+is missing in Firefox and the referrer is not sent). It then announces
+`{t: "ready"}` to the origin that said hello. After that the page sends
+`{t, id, nonce, ...}`; the frame answers `{t: "result", id, cmd, ok, data | error}`
+and announces `{t: "state"}`.
 
 | command | fields | answer |
 |---|---|---|
@@ -23,10 +29,26 @@ The page sends `{t, id, nonce, ...}` to the frame; the frame answers
 | `refresh` | `base` | `{base, moved}`, and the files when the branch moved |
 | `disconnect` | none | `{connected: false}` |
 
+`propose` is a write, so it is **confirmed in the frame**: the frame shows what is
+proposed (title, repository, number of files) and waits for a click on its own
+Allow button (a script of the page cannot click inside the frame; a synthetic
+click is refused), 120 s at most, one at a time.
+
+Limits that remain, inherent to a page that embeds a frame: a script injected
+into the page can read the nonce (the iframe's `src`) and send the typed commands
+(read the loaded folder; ask for a proposal, which the person must then confirm in
+the frame), and it can draw a fake pane over the frame and ask for a token itself.
+Neither returns a credential from the frame; the second is a phishing of the
+person, only as visible as a pane that looks wrong.
+
 There is no command that takes or returns a token, and none that signs in: the
 token is typed into the frame's own password input, and GitLab's redirect
 sign-in (a popup of this origin, `callback.html`, PKCE) is started from the
-frame's own button. "Remember on this device" keeps the token in **this
+frame's own button; the popup is opened unnamed and `noopener,noreferrer`, so
+neither the playground page nor GitLab's page holds a handle to it or a name to
+target, and the way back is a same-origin `BroadcastChannel` (not a
+`postMessage`, whose origin there would be GitLab's), checked against the state
+kept here. "Remember on this device" keeps the token in **this
 origin's** `localStorage`, with the forge it is for, only when ticked;
 Disconnect removes it (and revokes a GitLab sign-in).
 

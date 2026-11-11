@@ -13,6 +13,8 @@ label{display:block;margin:6px 0 2px}
 input[type=password],select{width:100%;box-sizing:border-box;padding:4px;font:inherit}
 button{margin:8px 6px 0 0;padding:4px 10px;font:inherit}
 #status{margin-top:8px;min-height:1.4em}
+#ask{border:2px solid #c80;padding:6px;margin-top:8px}
+#ask p{margin:0 0 4px}
 </style>
 <script src="wasm_exec.js" defer></script>
 <script src="shell.js" defer></script>
@@ -27,6 +29,10 @@ button{margin:8px 6px 0 0;padding:4px 10px;font:inherit}
 <button id="connect" type="button">Connect</button>
 <button id="signin" type="button" hidden>Sign in with GitLab</button>
 <button id="disconnect" type="button" disabled>Disconnect</button>
+</div>
+<div id="ask" role="alertdialog" aria-labelledby="asktext" hidden>
+<p id="asktext"></p>
+<button id="allow" type="button"></button><button id="deny" type="button"></button>
 </div>
 <div id="status" role="status" aria-live="polite"></div>
 </body>

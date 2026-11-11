@@ -167,17 +167,21 @@ const pageHTML = `<!doctype html><meta charset="utf-8"><title>page</title><body>
     else if (m.t === "state" || m.t === "ready") window.events.push(m);
   });
   let seq = 0;
-  window.send = (t, fields, nonce) => new Promise((ok, ko) => {
+  window.send = (t, fields, nonce, ms) => new Promise((ok, ko) => {
     const id = "c" + (++seq);
     pending.set(id, ok);
     document.getElementById("f").contentWindow.postMessage(Object.assign({ t, id, nonce: nonce === undefined ? NONCE : nonce }, fields || {}), window.FRAME_ORIGIN);
-    setTimeout(() => { if (pending.delete(id)) ok(null); }, 1500);
+    setTimeout(() => { if (pending.delete(id)) ok(null); }, ms || 1500);
   });
   // via about:blank: the frame removes the fragment from its address, so the same
   // URL again would be only a fragment navigation, not a reload
-  window.open_ = (src) => {
+  // The frame says nothing until this page has said hello, with the nonce, once
+  // its document has loaded (as the playground does): there is no
+  // ancestorOrigins and no referrer to ask, in any browser.
+  window.open_ = (src, nohello) => {
     const f = document.getElementById("f");
     window.events.length = 0;
+    f.onload = () => { if (!nohello && f.src !== "about:blank") f.contentWindow.postMessage({ t: "hello", nonce: NONCE }, window.FRAME_ORIGIN); };
     f.src = "about:blank";
     setTimeout(() => { f.src = src; }, 50);
   };
@@ -249,12 +253,21 @@ const pageHTML = `<!doctype html><meta charset="utf-8"><title>page</title><body>
   await top.close();
   const foreign = await browser.newPage(); // the same markup on another origin
   await foreign.goto(C + "/", { waitUntil: "load" });
-  const ffr = await openFrame(foreign, B);
-  await until("the refusal", async () => (await ffr.evaluate(() => document.body.textContent)).startsWith("Refused: framed by an unexpected origin"));
+  await openFrame(foreign, B); // this page says hello too, with the right nonce
+  await sleep(1500);
   const fsend = await foreign.evaluate(() => window.send("status"));
   if (fsend !== null) fail("the frame answered a page of an origin it was not rendered for: " + JSON.stringify(fsend));
+  const fmsgs = await foreign.evaluate(() => window.log.filter((m) => m.indexOf("goSlides") >= 0 || m.indexOf('"ready"') >= 0 || m.indexOf('"state"') >= 0));
+  if (fmsgs.length) fail("the frame spoke to a page of an origin it was not rendered for: " + fmsgs.join(" | "));
   await foreign.close();
-  out.origins = "refuses a top-level load and a frame under another origin";
+  // and a frame under the right origin says nothing before the page says hello
+  await page.evaluate((o, src) => { window.FRAME_ORIGIN = o; window.open_(src, true); }, B, B + "/shell.html#" + NONCE);
+  await sleep(2500);
+  if (await page.evaluate(() => window.events.length)) fail("the frame spoke before the page said hello");
+  if ((await page.evaluate(() => window.send("status"))) !== null) fail("the frame answered a page that had not said hello");
+  fr = await openFrame(page, B);
+  await until("the frame's ready after hello", () => page.evaluate(() => window.events.some((e) => e.t === "ready")));
+  out.origins = "refuses a top-level load; says nothing to a frame under another origin, nor before hello; answers the page after hello";
 
   // 2. The page cannot read the frame (cross-origin), and the token is typed in the frame.
   const cross = await page.evaluate(() => {
@@ -278,7 +291,26 @@ const pageHTML = `<!doctype html><meta charset="utf-8"><title>page</title><body>
   if (r.text["deck.md"] !== deck) fail("load brought other bytes");
   const base = r.data.base;
   const edited = deck + "\nmore\n";
-  r = await page.evaluate((base, edited) => window.send("propose", { base, title: "Fix the deck", body: "from the test", files: { "deck.md": new TextEncoder().encode(edited), "new.md": new TextEncoder().encode("x") } }), base, edited);
+  // A proposal is a WRITE: the frame shows it and waits for the person's click on
+  // its own button. A script of the page cannot click inside the frame.
+  const proposeCmd = (base, edited, title) => window.send("propose", { base, title, body: "from the test", files: { "deck.md": new TextEncoder().encode(edited), "new.md": new TextEncoder().encode("x") } }, undefined, 20000);
+  const writes = () => calls.filter((c) => c.method === "POST").length;
+  let w0 = writes();
+  let pend = page.evaluate(proposeCmd, base, edited, "Not wanted");
+  await until("the confirmation", () => fr.$eval("#ask", (e) => !e.hidden));
+  if (!(await fr.$eval("#asktext", (e) => e.textContent)).includes("Not wanted") || !(await fr.$eval("#asktext", (e) => e.textContent)).includes("o/r")) fail("the confirmation does not say what is proposed");
+  if (writes() !== w0) fail("something was written before the person confirmed");
+  await fr.click("#deny");
+  r = await pend;
+  if (!r || r.ok !== false || !/Not confirmed/.test(r.error)) fail("a declined proposal: " + JSON.stringify(r));
+  if (writes() !== w0) fail("a declined proposal wrote");
+  // a second proposal while one waits is refused, not queued
+  pend = page.evaluate(proposeCmd, base, edited, "Fix the deck");
+  await until("the confirmation", () => fr.$eval("#ask", (e) => !e.hidden));
+  const second = await page.evaluate((base) => window.send("propose", { base, title: "Another", body: "", files: {} }, undefined, 3000), base);
+  if (!second || second.ok !== false) fail("a second proposal was not refused while one waits: " + JSON.stringify(second));
+  await fr.click("#allow");
+  r = await pend;
   if (!r || !r.ok || r.data.url !== "https://github.com/o/r/pull/7" || !r.data.branch.startsWith("slides/fix-the-deck-")) fail("propose: " + JSON.stringify(r));
   const ref = calls.find((c) => c.method === "POST" && c.path === "/repos/o/r/git/refs");
   if (!ref || !JSON.parse(ref.body).ref.startsWith("refs/heads/slides/")) fail("the proposal did not make a new slides/ branch: " + JSON.stringify(ref));
@@ -363,7 +395,10 @@ const pageHTML = `<!doctype html><meta charset="utf-8"><title>page</title><body>
   await until("GitLab connected", () => page.evaluate(() => window.events.some((e) => e.t === "state" && e.connected && e.forge === "gitlab")));
   r = await page.evaluate(() => window.send("load", { repo: "g/p", dir: "talk" }));
   if (!r || !r.ok || r.text["deck.md"] === undefined || r.data.base.forge !== "gitlab") fail("GitLab load: " + JSON.stringify(r));
-  r = await page.evaluate((base) => window.send("propose", { base, title: "A change", body: "b", files: { "deck.md": new TextEncoder().encode("changed") } }), r.data.base);
+  pend = page.evaluate((base) => window.send("propose", { base, title: "A change", body: "b", files: { "deck.md": new TextEncoder().encode("changed") } }, undefined, 20000), r.data.base);
+  await until("the confirmation", () => fr.$eval("#ask", (e) => !e.hidden));
+  await fr.click("#allow");
+  r = await pend;
   if (!r || !r.ok || r.data.url !== "https://gitlab.com/g/p/-/merge_requests/3" || !r.data.branch.startsWith("slides/a-change-")) fail("GitLab propose: " + JSON.stringify(r));
   const commitCall = JSON.parse(calls.find((c) => c.host === "gitlab.com" && c.path.endsWith("/repository/commits")).body);
   if (commitCall.force !== false || commitCall.branch === "main" || !commitCall.branch.startsWith("slides/")) fail("GitLab commit: " + JSON.stringify(commitCall));
@@ -381,7 +416,7 @@ const pageHTML = `<!doctype html><meta charset="utf-8"><title>page</title><body>
   await fr.evaluate(() => { window.open = (u, name, features) => { window.__popup = { u, name, features }; return null; }; });
   await fr.click("#signin");
   const pop = await until("the popup", () => fr.evaluate(() => window.__popup));
-  if (!pop.u.startsWith("https://gitlab.com/oauth/authorize?") || !/popup/.test(pop.features)) fail("the sign-in popup: " + JSON.stringify(pop));
+  if (!pop.u.startsWith("https://gitlab.com/oauth/authorize?") || !/popup/.test(pop.features) || pop.name !== "_blank" || !/noopener/.test(pop.features)) fail("the sign-in popup must be unnamed and noopener: " + JSON.stringify(pop));
   const ppage = await browser.newPage();
   await intercept(ppage);
   await ppage.goto(pop.u, { waitUntil: "load" }).catch(() => {});
