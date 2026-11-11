@@ -1,0 +1,8 @@
+{
+  "org": "go-slides-usercontent",
+  "repo": "go-slides-usercontent.github.io",
+  "parents": ["https://go-slides.github.io"],
+  "shells": ["/shell.html"],
+  "csp": "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' https://api.github.com https://gitlab.com; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+  "probe": "status"
+}

@@ -40,6 +40,41 @@ jobs:
       - name: fuzz the command checks
         run: go test -run '^$' -fuzz FuzzChecks -fuzztime 30s ./frame
 
+  # The same gate the playground's CI runs against the published frame
+  # (secondorigin verify, fleettools#243), run here against THIS build, in Chromium
+  # and Firefox: the frame is loaded as the parent's frame, from foreign origins,
+  # nested and with wrong nonces, and must answer the parent and nobody else.
+  # Firefox has no location.ancestorOrigins and the frame sends no referrer: the
+  # parent says hello (see README).
+  second-origin:
+    name: the frame verified in Chromium and Firefox
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.4' }
+      - name: playwright browsers
+        run: go run github.com/mxschmitt/playwright-go/cmd/playwright@v0.6401.0 install --with-deps chromium firefox
+        working-directory: ${{ runner.temp }}
+      - name: render and serve this build
+        run: |
+          set -eu
+          go run ./cmd/site --allow https://go-slides.github.io --out "$RUNNER_TEMP/_site"
+          go build -o "$RUNNER_TEMP/serve" ./cmd/serve
+          "$RUNNER_TEMP/serve" --dir "$RUNNER_TEMP/_site" --port-file "$RUNNER_TEMP/port" &
+          for _ in $(seq 50); do [ -s "$RUNNER_TEMP/port" ] && break; sleep 0.1; done
+      - name: secondorigin verify
+        run: |
+          set -eu
+          umask 077
+          token="${RUNNER_TEMP}/secondorigin-token"
+          trap 'rm -f "${token}"' EXIT
+          printf '%s' '${{ github.token }}' > "${token}"
+          go run github.com/go-fleettools/fleettools/cmd/secondorigin@v0.105.0 verify \
+            --file .second-origin.json --token-file "${token}" \
+            --live-url "http://127.0.0.1:$(cat "$RUNNER_TEMP/port")" \
+            --browser chromium --browser firefox --retry 2
+
   browser:
     name: the frame in Chrome
     runs-on: ubuntu-latest
